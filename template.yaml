@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AWS tagging Compliance script
+
+  AWS Lambda function for validation Compliance alignment
+
+Parameters:
+  pEnableComplianceCheck:
+    Type: String
+    Default: 'true'
+    Description: Enable the Daily Compliance Check Lambda
+    AllowedValues:
+      - 'true'
+      - 'false'
+    ConstraintDescription: 'Only True/False values allowed'
+
+  pDaysWithoutTag:
+    Type: Number
+    Default: 30
+    Description: Number of Days EC2 Instance should be without Tag
+    MinValue: 1
+    MaxValue: 365
+    ConstraintDescription: 'Number must be between 1 and 365 inclusive'
+
+  pListofValidTags:
+    Type: String
+    Description: Pipe | Separated List of Valid Tags to check for
+    Default: ValidTag1 | ValidTag2  
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  ComplianceCheckFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: compliance_check/
+      Handler: app.lambda_handler
+      Runtime: python3.8
+      Environment:
+        Variables:
+          DaysWithoutTag: !Ref pDaysWithoutTag
+          ListofValidTags: !Ref pListofValidTags
+          BucketName: !GetAtt ReportBucket.Arn
+          TableName: !Ref StatusTable
+      Events:
+        DailyComplianceCheck:
+          Type: Schedule # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Schedule: 'rate(1 day)'
+            Name: compliance_check
+            Description: Run Daily Compliance Check
+            Enabled: !Ref pEnableComplianceCheck
+      Policies:
+        - EC2DescribePolicy: {}
+        - S3CrudPolicy:
+            BucketName: !Ref ReportBucket
+        - DynamoDBWritePolicy:
+            TableName: !Ref StatusTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref StatusTable
+
+  ReportBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-tagging-compliance-reports'
+
+  StatusTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey: 
+        Name: ServerKey
+        Type: String
+      TableName: !Sub '${AWS::AccountId}-tagging-compliance-status'
+
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  ComplianceCheckFunction:
+    Description: "Compliance Check Lambda Function ARN"
+    Value: !GetAtt ComplianceCheckFunction.Arn
