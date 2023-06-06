@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  EmailAddress:
+    Type: String
+    Description: Email address to receive notifications
+Resources:
+  EC2CreationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: EC2CreationAlarm
+      AlarmDescription: Alarm for EC2 instance creation
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref EC2InstanceId
+      ComparisonOperator: GreaterThanThreshold
+      Statistic: SampleCount
+      Threshold: 0
+      Period: 60
+      EvaluationPeriods: 1
+      AlarmActions:
+        - !Ref EmailNotification
+      InsufficientDataActions: []
+      AlarmActionsEnabled: True
+      TreatMissingData: notBreaching
+  EC2DeletionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: EC2DeletionAlarm
+      AlarmDescription: Alarm for EC2 instance deletion
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_Instance
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref EC2InstanceId
+      ComparisonOperator: GreaterThanThreshold
+      Statistic: SampleCount
+      Threshold: 0
+      Period: 60
+      EvaluationPeriods: 1
+      AlarmActions:
+        - !Ref EmailNotification
+      InsufficientDataActions: []
+      AlarmActionsEnabled: True
+      TreatMissingData: notBreaching
+  RDSCreationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDSCreationAlarm
+      AlarmDescription: Alarm for RDS instance creation
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref RDSInstanceIdentifier
+      ComparisonOperator: GreaterThanThreshold
+      Statistic: SampleCount
+      Threshold: 0
+      Period: 60
+      EvaluationPeriods: 1
+      AlarmActions:
+        - !Ref EmailNotification
+      InsufficientDataActions: []
+      AlarmActionsEnabled: True
+      TreatMissingData: notBreaching
+  RDSDeletionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDSDeletionAlarm
+      AlarmDescription: Alarm for RDS instance deletion
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref RDSInstanceIdentifier
+      ComparisonOperator: LessThanThreshold
+      Statistic: SampleCount
+      Threshold: 0
+      Period: 60
+      EvaluationPeriods: 1
+      AlarmActions:
+        - !Ref EmailNotification
+      InsufficientDataActions: []
+      AlarmActionsEnabled: True
+      TreatMissingData: notBreaching
+  EmailNotification:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref EmailAddress
+          Protocol: email
+Outputs:
+  CloudWatchAlarms:
+    Value:
+      - EC2CreationAlarm
+      - EC2DeletionAlarm
+      - RDSCreationAlarm
+      - RDSDeletionAlarm
+    Description: CloudWatch Alarms
