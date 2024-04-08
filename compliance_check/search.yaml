@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for creating resources for Splunk search non-prod environment
+
+Parameters:
+  EnvironmentType:
+    Type: String
+    Default: eval
+    Description: The type of environment (eval or ss-nonprod)
+    AllowedValues: [eval, ss-nonprod]
+  SplunkUserUID:
+    Type: Number
+    Default: 1250
+    Description: The UID of the Splunk user
+  SplunkUserGID:
+    Type: Number
+    Default: 1250
+    Description: The GID of the Splunk user
+
+Mappings:
+  InstanceTypeMap:
+    eval:
+      InstanceType: t3a.medium
+    ss-nonprod:
+      InstanceType: c7i.4xlarge
+
+Resources:
+  SplunkALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref Subnet1a
+        - !Ref Subnet1b
+        - !Ref Subnet1c
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !If [IsEval, "np.splunk.eval.aamc.org", "splunk.ent-np.aamc.org"]
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Splunk ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !If [IsEval, "eval-splunk-search-nonprod-ALB-SG", "ss-nonprod-splunk-search-nonprod-ALB-SG"]
+
+  SplunkTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: "/"
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Port: 8000
+      Protocol: HTTPS
+      TargetType: instance
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !If [IsEval, "eval-splunk-search-nonprod-TargetGroup", "ss-nonprod-splunk-search-nonprod-TargetGroup"]
+
+  SplunkListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: "HTTP_301"
+      LoadBalancerArn: !Ref SplunkALB
+      Port: 80
+      Protocol: HTTP
+
+  SplunkInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !FindInMap [InstanceTypeMap, !Ref EnvironmentType, InstanceType]
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id}}"
+      SubnetId: !Ref Subnet1a
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-splunk-search-nonprod-Instance"
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Splunk EC2 instances
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !If [IsEval, "eval-splunk-search-nonprod-Instance-SG", "ss-nonprod-splunk-search-nonprod-Instance-SG"]
+
+  UserData:
+    Type: AWS::CloudFormation::Init
+    Properties:
+      Metadata:
+        AWS::CloudFormation::Init:
+          configSets:
+            default:
+              - setupSplunkUser
+              - disableSSH
+          setupSplunkUser:
+            commands:
+              01_createSplunkUser:
+                command: useradd -m -s /bin/bash -u 1250 splunk
+              02_setSplunkOwnership:
+                command: chown splunk:splunk /home/splunk
+          disableSSH:
+            commands:
+              01_disableSSHPAM:
+                command: sed -i '/^splunk:/ s/:\/bin\/bash/:\/sbin\/nologin/' /etc/passwd
+
+Conditions:
+  IsEval: !Equals [!Ref EnvironmentType, "eval"]
+
+Outputs:
+  ALBDNS:
+    Description: DNS for the ALB
+    Value: !GetAtt SplunkALB.DNSName
