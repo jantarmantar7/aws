@@ -1,0 +1,400 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Splunk Application Stack - Non-Production Environment
+
+Parameters:
+  EnvironmentType:
+    Description: Type of environment (e.g., EVAL, SS NON-PROD)
+    Type: String
+    Default: SS NON-PROD
+    AllowedValues:
+      - EVAL
+      - SS NON-PROD
+    ConstraintDescription: Must be a valid environment type.
+  HostedZoneId: 
+    Description: Hosted Zone ID
+    Type: String
+    Default: Z0153971118U2PG84DOIP #you need to create the Host ID in route 53
+  Pod: 
+    Description: Name of the pod
+    Type: String
+    Default: splunk
+  Technology: 
+    Description: Name of the technology
+    Type: String
+    Default: search
+  InstanceKeyPair: 
+    Description: EC2 key pair
+    Type: String
+    Default: splunk-instance-key-pair #You need to create your key
+  InstanceImageId: 
+    Description: EC2 image ID
+    Type: String
+    Default: ami-09298640a92b2d12c #your AMIL ID may change based on the region, this is for Mumbai region
+  InstanceOS: 
+    Description: OS of the instance
+    Type: String
+    Default: linux
+  
+
+Resources:
+
+  SplunkSearchVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-vpc"
+        - Key: Tech
+          Value: !Sub ${Technology}
+        - Key: Pod
+          Value: !Sub ${Pod}
+
+  SplunkSearchVpcSubnetPublicA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SplunkSearchVpc
+      CidrBlock: '10.0.0.0/24'
+      AvailabilityZone: 'ap-south-1a'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-public-subnetA"
+        - Key: Tech
+          Value: !Sub ${Technology}
+        - Key: Pod
+          Value: !Sub ${Pod}
+
+  SplunkSearchVpcSubnetPrivateA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SplunkSearchVpc
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: 'ap-south-1a'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-private-subnetA"
+        - Key: Tech
+          Value: !Sub ${Technology}
+        - Key: Pod
+          Value: !Sub ${Pod}
+  
+  SplunkSearchVpcSubnetPublicB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SplunkSearchVpc
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: 'ap-south-1b'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-public-subnetB"
+        - Key: Tech
+          Value: !Sub ${Technology}
+        - Key: Pod
+          Value: !Sub ${Pod}
+    
+  SplunkSearchVpcSubnetPrivateB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SplunkSearchVpc
+      CidrBlock: '10.0.3.0/24'
+      AvailabilityZone: 'ap-south-1b'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-private-subnetB"
+        - Key: Tech
+          Value: !Sub ${Technology}
+        - Key: Pod
+          Value: !Sub ${Pod}
+
+  SplunkSearchVpcSubnetPrivateC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SplunkSearchVpc
+      CidrBlock: '10.0.4.0/24'
+      AvailabilityZone: 'ap-south-1c'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-private-subnetC"
+        - Key: Tech
+          Value: !Sub ${Technology}
+        - Key: Pod
+          Value: !Sub ${Pod}
+
+  SplunkSearchVpcSubnetPublicC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SplunkSearchVpc
+      CidrBlock: '10.0.5.0/24'
+      AvailabilityZone: 'ap-south-1c'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-public-subnetC"
+        - Key: Tech
+          Value: !Sub ${Technology}
+        - Key: Pod
+          Value: !Sub ${Pod}
+
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentType}-${Pod}-IGW'
+        - Key: Network
+          Value: Public
+ 
+  GatewayToInternet:
+        Type: 'AWS::EC2::VPCGatewayAttachment'
+        Properties:
+          VpcId: !Ref SplunkSearchVpc
+          InternetGatewayId: !Ref InternetGateway
+ 
+  PublicRouteTable:
+        Type: 'AWS::EC2::RouteTable'
+        Properties:
+          VpcId: !Ref SplunkSearchVpc
+          Tags:
+            - Key: "Name"
+              Value: !Sub '${EnvironmentType}-${Pod}-PUB-RT'
+  
+  PublicRoute:
+        Type: 'AWS::EC2::Route'
+        DependsOn: GatewayToInternet
+        Properties:
+          RouteTableId: !Ref PublicRouteTable
+          DestinationCidrBlock: 0.0.0.0/0
+          GatewayId: !Ref InternetGateway
+ 
+  PublicSubnetARouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref SplunkSearchVpcSubnetPublicA
+          RouteTableId: !Ref PublicRouteTable
+ 
+  PublicSubnetBRouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref SplunkSearchVpcSubnetPublicB
+          RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetCRouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref SplunkSearchVpcSubnetPublicC
+          RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+      Type: 'AWS::EC2::RouteTable'
+      Properties:
+        VpcId: !Ref SplunkSearchVpc
+        Tags:
+          - Key: "Name"
+            Value: !Sub '${EnvironmentType}-${Pod}-PVT-RT'
+
+  PrivateSubnetARouteTableAssociation:
+      Type: 'AWS::EC2::SubnetRouteTableAssociation'
+      Properties:
+        SubnetId: !Ref SplunkSearchVpcSubnetPrivateA
+        RouteTableId: !Ref PrivateRouteTable
+ 
+  PrivateSubnetBRouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref SplunkSearchVpcSubnetPrivateB
+          RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetCRouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref SplunkSearchVpcSubnetPrivateC
+          RouteTableId: !Ref PrivateRouteTable   
+  
+  SplunkVpcSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for VPC
+      VpcId: !Ref SplunkSearchVpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-vpc-sg"
+        - Key: Pod
+          Value: !Sub ${Pod}
+        - Key: Technology
+          Value: !Sub ${Technology}
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the application load balancer
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref SplunkSearchVpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-lb-sg"
+        - Key: Pod
+          Value: !Sub ${Pod}
+        - Key: Technology
+          Value: !Sub ${Technology}
+  
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EC2 instances
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+      VpcId: !Ref SplunkSearchVpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-instance-sg"
+        - Key: Pod
+          Value: !Sub ${Pod}
+        - Key: Technology
+          Value: !Sub ${Technology}
+
+  SplunkInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !If [IsEval, t3a.medium, c7i.4xlarge]
+      KeyName: !Ref InstanceKeyPair
+      ImageId: !Ref InstanceImageId
+      SubnetId: !Ref SplunkSearchVpcSubnetPublicA
+      SecurityGroupIds:
+        - !GetAtt InstanceSecurityGroup.GroupId
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource SplunkInstance --region ${AWS::Region}
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${InstanceOS}-${Pod}-${Technology}-instance"
+        - Key: Pod
+          Value: !Sub ${Pod}
+        - Key: Technology
+          Value: !Sub ${Technology}
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvironmentType}-${Pod}-alb"
+      Subnets:
+        - !Ref SplunkSearchVpcSubnetPublicA
+        - !Ref SplunkSearchVpcSubnetPublicB
+        - !Ref SplunkSearchVpcSubnetPublicC
+      SecurityGroups:
+        - !GetAtt LoadBalancerSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-alb"
+        - Key: Pod
+          Value: !Sub ${Pod}
+        - Key: Technology
+          Value: !Sub ${Technology}
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvironmentType}-${Pod}-target-group"
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref SplunkSearchVpc
+      TargetType: instance
+      Targets:
+        - Id:
+            Ref: SplunkInstance
+          Port: 8000
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentType}-${Pod}-target-group"
+        - Key: Pod
+          Value: !Sub ${Pod}
+        - Key: Technology
+          Value: !Sub ${Technology}
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref SplunkACMCertificate
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+  
+  ALBHttpRedirectListener: 
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: 443
+            Host: "#{host}"
+            Path: "/#{path}"
+            Query: "#{query}"
+            StatusCode: HTTP_301
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  SplunkACMCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref SplunkDomin
+      DomainValidationOptions:
+        - DomainName: !Ref SplunkDomin
+          HostedZoneId: !Ref HostedZoneId
+      ValidationMethod: DNS
+      Tags:
+        - Key: Pod
+          Value: !Sub ${Pod}
+        - Key: Technology
+          Value: !Sub ${Technology}
+
+  ACMALBAttachment:
+    Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref SplunkACMCertificate
+      ListenerArn: !Ref ALBListener
+
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !If [IsEval, "apps.splunk.eval.aamc.org", "apps.splunk.ent.aamc.org"]
+      Type: A
+      AliasTarget:
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        DNSName: !GetAtt LoadBalancer.DNSName
+
+Outputs:
+  LoadBalancerDNSName:
+    Description: DNS name of the application load balancer
+    Value: !GetAtt LoadBalancer.DNSName
+  LoadBalancerSecurityGroupId: 
+    Value: !Ref LoadBalancerSecurityGroup
+
+Conditions:
+  IsEval: !Equals [!Ref EnvironmentType, "EVAL"]
+
