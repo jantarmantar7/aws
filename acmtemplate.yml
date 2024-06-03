@@ -1,0 +1,227 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to monitor expirations of imported certificates in ACM, log findings in Security Hub, and send notifications through SNS.
+
+Parameters:
+  ExpiryDays:
+    Type: Number
+    Default: 45
+    Description: Number of days before certificate expiration to trigger alert
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaCertificateExpiryPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: LambdaCertificateExpiryPolicy1
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: LambdaCertificateExpiryPolicy2
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: LambdaCertificateExpiryPolicy3
+                Effect: Allow
+                Action:
+                  - acm:DescribeCertificate
+                  - acm:GetCertificate
+                  - acm:ListCertificates
+                  - acm:ListTagsForCertificate
+                Resource: "*"
+              - Sid: LambdaCertificateExpiryPolicy4
+                Effect: Allow
+                Action: sns:Publish
+                Resource: "*"
+              - Sid: LambdaCertificateExpiryPolicy5
+                Effect: Allow
+                Action:
+                  - securityhub:BatchImportFindings
+                  - securityhub:BatchUpdateFindings
+                  - securityhub:DescribeHub
+                Resource: "*"
+              - Sid: LambdaCertificateExpiryPolicy6
+                Effect: Allow
+                Action: cloudwatch:ListMetrics
+                Resource: "*"
+
+  CertificateExpirationMonitorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from datetime import datetime, timedelta, timezone
+
+          utc = timezone.utc
+          today = datetime.now().replace(tzinfo=utc)
+          expiry_days = int(os.environ['EXPIRY_DAYS'])
+          expiry_window = today + timedelta(days=expiry_days)
+
+          def lambda_handler(event, context):
+              response = handle_multiple_certs(event, context.invoked_function_arn)
+              return {
+                  'statusCode': 200,
+                  'body': response 
+              }
+
+          def handle_multiple_certs(event, context_arn):
+              cert_client = boto3.client('acm')
+              cert_list = json.loads(get_expiring_cert_arns())
+              if cert_list is None:
+                  response = 'No certificates are expiring within ' + str(expiry_days) + ' days.'
+              else:
+                  response = 'The following certificates are expiring within ' + str(expiry_days) + ' days: \n'
+                  for csl in cert_list:
+                      cert_arn = json.dumps(csl['Dimensions'][0]['Value']).replace('\"', '')
+                      cert_details = cert_client.describe_certificate(CertificateArn=cert_arn)
+                      if cert_details['Certificate']['NotAfter'] < expiry_window:
+                          current_cert = 'Domain:' + cert_details['Certificate']['DomainName'] + ' (' + cert_details['Certificate']['CertificateArn'] + '), \n'
+                          print(current_cert)
+                          result = log_finding_to_sh(event, cert_details, context_arn)
+                          response = response + current_cert
+                  sns_client = boto3.client('sns')
+                  sns_client.publish(TopicArn=os.environ['SNS_TOPIC_ARN'], Message=response.rstrip(', \n'), Subject='Certificate Expiration Notification')
+              return response
+
+          def log_finding_to_sh(event, cert_details, context_arn):
+              sh_region = get_sh_region(event['region'])
+              sh_hub_arn = "arn:aws:securityhub:{0}:{1}:hub/default".format(sh_region, event['account'])
+              sh_product_arn = "arn:aws:securityhub:{0}:{1}:product/{1}/default".format(sh_region, event['account'])
+              sh_client = boto3.client('securityhub', region_name=sh_region)
+              try:
+                  sh_enabled = sh_client.describe_hub(HubArn=sh_hub_arn)
+              except Exception as error:
+                  sh_enabled = None
+                  print ('Default Security Hub product doesn\'t exist')
+                  return 'Security Hub disabled'
+              cert_id = right(cert_details['Certificate']['CertificateArn'], 36)
+              if sh_enabled:
+                  new_findings = []
+                  new_findings.append({
+                      "SchemaVersion": "2018-10-08",
+                      "Id": cert_id,
+                      "ProductArn": sh_product_arn,
+                      "GeneratorId": context_arn,
+                      "AwsAccountId": event['account'],
+                      "Types": [
+                          "Software and Configuration Checks/AWS Config Analysis"
+                      ],
+                      "CreatedAt": event['time'],
+                      "UpdatedAt": event['time'],
+                      "Severity": {
+                          "Original": '89.0',
+                          "Label": 'HIGH'
+                      },
+                      "Title": 'Certificate expiration',
+                      "Description": 'cert expiry',
+                      'Remediation': {
+                          'Recommendation': {
+                              'Text': 'A new certificate for ' + cert_details['Certificate']['DomainName'] + ' should be imported to replace the existing imported certificate before expiration',
+                              'Url': "https://console.aws.amazon.com/acm/home?region=" + event['region'] + "#/?id=" + cert_id
+                          }
+                      },
+                      'Resources': [
+                          {
+                              'Id': event['id'],
+                              'Type': 'ACM Certificate',
+                              'Partition': 'aws',
+                              'Region': event['region']
+                          }
+                      ],
+                      'Compliance': {'Status': 'WARNING'}
+                  })
+                  try:
+                      response = sh_client.batch_import_findings(Findings=new_findings)
+                      if response['FailedCount'] > 0:
+                          print("Failed to import {} findings".format(response['FailedCount']))
+                  except Exception as error:
+                      print("Error: ", error)
+                      raise
+              return json.dumps(response)
+
+          def get_expiring_cert_arns():
+              cert_list = []
+              cloudwatch = boto3.client('cloudwatch')
+              paginator = cloudwatch.get_paginator('list_metrics')
+              for response in paginator.paginate(
+                  MetricName='DaysToExpiry',
+                  Namespace='AWS/CertificateManager',
+                  Dimensions=[{'Name': 'CertificateArn'}],):
+                      cert_list = cert_list + (response['Metrics'])
+              return json.dumps(cert_list)
+
+          def get_sh_region(event_region):
+              if os.environ.get('SECURITY_HUB_REGION') is None:
+                  sh_region_local = event_region
+              else:
+                  sh_region_local = os.environ['SECURITY_HUB_REGION']
+              return sh_region_local
+
+          def right(value, count):
+              return value[-count:]
+
+      Environment:
+        Variables:
+          EXPIRY_DAYS: !Ref ExpiryDays
+          SNS_TOPIC_ARN: !Ref CertificateExpirationSNSTopic
+          SECURITY_HUB_REGION: !Ref "AWS::Region"
+
+  CertificateExpirationMonitorRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 day)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CertificateExpirationMonitorFunction.Arn
+          Id: TargetFunction
+      EventPattern:
+        source:
+          - aws.acm
+        detail-type:
+          - 'ACM Certificate Approaching Expiration'
+      State: ENABLED
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt CertificateExpirationMonitorFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CertificateExpirationMonitorRule.Arn
+
+  CertificateExpirationSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: CertificateExpirationNotifications
+      Subscription:
+        - Endpoint: your-email@example.com
+          Protocol: email
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the Lambda function
+    Value: !GetAtt CertificateExpirationMonitorFunction.Arn
+  SNSTopicArn:
+    Description: ARN of the SNS topic
+    Value: !Ref CertificateExpirationSNSTopic
+  CloudWatchRuleArn:
+    Description: ARN of the CloudWatch Rule
+    Value: !GetAtt CertificateExpirationMonitorRule.Arn
